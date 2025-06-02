@@ -152,42 +152,152 @@ print("Training...")
 avgloss = network.train(data, entries, epochs=150)
 print("Completed!")
 
-def preprocess_image(image_data):
-    # Remove data URL prefix if present
-    if 'data:image/png;base64,' in image_data:
-        image_data = image_data.split(',')[1]
-    
-    # Decode base64 image
-    image_bytes = base64.b64decode(image_data)
-    image = Image.open(io.BytesIO(image_bytes))
-    
-    # Convert to grayscale
-    image = image.convert('L')
-    
-    # Ensure it's 28x28
-    if image.size != (28, 28):
-        image = image.resize((28, 28), Image.Resampling.LANCZOS)
-    
-    # Convert to numpy array
-    image_array = np.array(image, dtype=float)
-    
-    # Debug: Print some statistics
-    print(f"Image shape: {image_array.shape}")
-    print(f"Pixel value range: {image_array.min():.1f} to {image_array.max():.1f}")
-    print(f"Mean pixel value: {image_array.mean():.1f}")
-    
-    # Canvas format: white digit (255) on black background (0)
-    # MNIST format after normalization: digit=1, background=0
-    # So we normalize directly: white becomes 1, black becomes 0
-    image_array = image_array / 255.0  # Direct normalization: black=0, white=1
-    
-    print(f"After normalization: {image_array.min():.3f} to {image_array.max():.3f}")
-    print(f"Mean after normalization: {image_array.mean():.3f}")
-    
-    # Reshape for network input
-    image_array = image_array.reshape(1, 784)
-    
-    return image_array
+'''In order for the digit to match the centered data in mnist dataset we train on, when processing the digit from the canvas, the image processed
+will be center for better recognition'''
+def preprocess_image(raw_data):
+    try:
+        # Just in case it's a base64 string with header info
+        if raw_data.startswith('data:image/png;base64,'):
+            raw_data = raw_data.split(',')[1]  # strip off the header part
+
+        # Decode the image from base64
+        decoded_bytes = base64.b64decode(raw_data)
+        img = Image.open(io.BytesIO(decoded_bytes))
+
+        # Convert to grayscale (one channel)
+        gray_img = img.convert('L')
+
+        # Ensure image is exactly 28x28
+        if gray_img.size != (28, 28):
+            print(f"Resizing from {gray_img.size} to 28x28")
+            gray_img = gray_img.resize((28, 28), Image.Resampling.LANCZOS)  # LANCZOS looks nicer
+
+        # Turn image into a NumPy array
+        pixel_array = np.array(gray_img, dtype=float)
+
+        print("Initial stats:")
+        print(f" - Shape: {pixel_array.shape}")
+        print(f" - Range: {pixel_array.min():.1f} to {pixel_array.max():.1f}")
+
+        # Normalize pixel values to range [0, 1]
+        pixel_array = pixel_array / 255.0
+
+        print("After normalization:")
+        print(f" - Min: {pixel_array.min():.3f}, Max: {pixel_array.max():.3f}, Mean: {pixel_array.mean():.3f}")
+
+        # Try to center the digit (in case it's not aligned)
+        aligned = center_digit(pixel_array)
+
+        if aligned is None:
+            print("Oops — centering failed. Using the original instead.")
+            aligned = pixel_array
+
+        # Check result size before reshaping
+        if aligned.shape != (28, 28):
+            print(f"Warning: Unexpected shape after centering: {aligned.shape}")
+            aligned = aligned[:28, :28]  # quick patch-up
+
+        print("Final image stats:")
+        print(f" - Shape: {aligned.shape}, Range: {aligned.min():.3f} to {aligned.max():.3f}")
+
+        # Flatten for model input
+        flattened = aligned.reshape(1, 784)
+
+        return flattened
+
+    except Exception as err:
+        print("Something went wrong in preprocessing...")
+        import traceback
+        traceback.print_exc()
+        raise err
+
+
+def center_digit(img_arr, threshold=0.1):
+    # Re-centers the digit by shifting based on center of mass
+    try:
+        print("Centering digit...")
+
+        # Create a mask where pixel value > threshold (i.e., likely digit)
+        mask = img_arr > threshold
+
+        if not np.any(mask):
+            print("No strong pixels found. Bail out.")
+            return img_arr
+
+        # Locate all non-zero pixel positions
+        ys, xs = np.where(mask)
+
+        if len(ys) == 0 or len(xs) == 0:
+            return img_arr  # Shouldn't happen but better safe than sorry
+
+        # Use weighted center of mass to get accurate shift
+        weights = img_arr[mask]
+        avg_y = np.average(ys, weights=weights)
+        avg_x = np.average(xs, weights=weights)
+
+        print(f"Digit center at ({avg_x:.2f}, {avg_y:.2f})")
+
+        # Figure out how far off-center we are
+        target = 13.5  # halfway point of a 28x28 image
+        delta_y = target - avg_y
+        delta_x = target - avg_x
+
+        # Skip if we're already close enough
+        if abs(delta_x) < 0.5 and abs(delta_y) < 0.5:
+            print("Already centered enough.")
+            return img_arr
+
+        shifted = shift_image(img_arr, delta_y, delta_x)
+        return shifted if shifted is not None else img_arr
+
+    except Exception as centering_err:
+        print("Centering error occurred.")
+        import traceback
+        traceback.print_exc()
+        return img_arr
+
+
+def shift_image(image, offset_y, offset_x):
+    """
+    Shifts the image around using simple numpy slicing.
+    """
+    try:
+        height, width = image.shape
+        moved = np.zeros_like(image)
+
+        # Use int shift only
+        dy = int(round(offset_y))
+        dx = int(round(offset_x))
+
+        print(f"Shifting image by dx={dx}, dy={dy}")
+
+        # Figure out valid slice bounds for source and destination
+        y_src_start = max(0, -dy)
+        y_src_end = min(height, height - dy)
+        x_src_start = max(0, -dx)
+        x_src_end = min(width, width - dx)
+
+        y_dst_start = max(0, dy)
+        y_dst_end = y_dst_start + (y_src_end - y_src_start)
+        x_dst_start = max(0, dx)
+        x_dst_end = x_dst_start + (x_src_end - x_src_start)
+
+        # Sanity check on slice ranges
+        if (y_src_end > y_src_start and x_src_end > x_src_start and
+                y_dst_end > y_dst_start and x_dst_end > x_dst_start):
+            moved[y_dst_start:y_dst_end, x_dst_start:x_dst_end] = \
+                image[y_src_start:y_src_end, x_src_start:x_src_end]
+        else:
+            print("Shift too large or out of bounds — skipping.")
+            return image
+
+        return moved
+
+    except Exception as shift_err:
+        print("Error while shifting the image:")
+        import traceback
+        traceback.print_exc()
+        return image
 
 @app.route('/predict', methods=['POST'])
 def predict_digit():
