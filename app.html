@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Draw Digits - ML Recognition</title>
+  <style>
+    body {
+      font-family: 'Arial', sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: white;
+      margin: 0;
+      padding: 25px;
+      min-height: 100vh;
+    }
+
+    .main-container {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+      padding: 35px;
+      text-align: center;
+      max-width: 650px;
+      width: 100%;
+    }
+    h1 {
+      color: #2c3e50;
+      margin-bottom: 15px;
+      font-size: 2rem;
+    }
+
+    .drawing-area {
+      margin: 25px 0;
+      position: relative;
+      display: inline-block;
+    }
+
+    #main-canvas {
+      background-color: black;
+      border: 3px solid grey;
+      cursor: crosshair;
+      width: 280px;
+      height: 280px;
+      image-rendering: pixelated;
+      border-radius: 8px;
+    }
+
+    #small-preview {
+      background-color: #000;
+      border: 2px solid #bdc3c7;
+      margin-left: 25px;
+      width: 112px;
+      height: 112px;
+      image-rendering: pixelated;
+      border-radius: 4px;
+    }
+
+    .canvas-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 25px;
+      flex-wrap: wrap;
+    }
+
+    .canvas-info {
+      font-size: 13px;
+      color: #7f8c8d;
+      margin-top: 8px;
+      font-style: italic;
+    }
+
+    .controls {
+      margin: 25px 0;
+      display: flex;
+      gap: 15px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .button {
+      background: linear-gradient(45deg, green, green);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+      min-width: 120px;
+    }
+
+    .button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(46, 204, 113, 0.3);
+    }
+
+    .button:disabled {
+      background: grey;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .clear-button {
+      background: linear-gradient(45deg, #e74c3c, #c0392b);
+    }
+
+    .clear-button:hover {
+      box-shadow: 0 4px 12px red;
+    }
+
+    #results {
+      margin: 25px 0;
+      padding: 20px;
+      background: linear-gradient(135deg, white, white);
+      border-radius: 8px;
+      display: none;
+      border-left: 5px solid green;
+    }
+
+    #predicted-digit {
+      font-size: 32px;
+      font-weight: bold;
+      margin: 15px 0;
+      color: navy;
+      text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+    }
+
+    .help-text {
+      margin: 18px 0;
+      color: grey;
+      font-size: 15px;
+      line-height: 1.4;
+    }
+
+    .error-state {
+      background: linear-gradient(135deg, #ffebee, #ffcdd2);
+      color: red;
+      border-left-color: red;
+    }
+
+    @media (max-width: 600px) {
+      .canvas-wrapper {
+        flex-direction: column;
+        gap: 15px;
+      }
+
+      #small-preview {
+        margin-left: 0;
+      }
+
+      .controls {
+        flex-direction: column;
+        align-items: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="main-container">
+    <h1>🎨 Digit Recognition Canvas</h1>
+    <p class="help-text">
+      Draw any digit from 0 to 9 in the black canvas below using white ink.<br>
+      The AI will try to guess what number you drew!
+    </p>
+
+    <div class="drawing-area">
+      <div class="canvas-wrapper">
+        <div>
+          <canvas id="main-canvas" width="28" height="28"></canvas>
+          <div class="canvas-info">Main Drawing Area (28×28 pixels)</div>
+        </div>
+        <div>
+          <canvas id="small-preview" width="28" height="28"></canvas>
+          <div class="canvas-info">Actual Size Preview</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="submit-drawing" class="button">🤖 Predict Digit</button>
+      <button id="clear-drawing" class="button clear-button">🗑️ Clear Canvas</button>
+    </div>
+
+    <div id="results">
+      <p style="margin: 0; font-size: 18px;">AI Prediction:</p>
+      <div id="predicted-digit">?</div>
+      <button id="draw-again" class="button">✏️ Draw Another</button>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('main-canvas');
+    const ctx = canvas.getContext('2d');
+    const previewCanvas = document.getElementById('small-preview');
+    const previewCtx = previewCanvas.getContext('2d');
+
+    const submitBtn = document.getElementById('submit-drawing');
+    const clearBtn = document.getElementById('clear-drawing');
+    const resultsDiv = document.getElementById('results');
+    const predictionDisplay = document.getElementById('predicted-digit');
+    const drawAgainButton = document.getElementById('draw-again');
+
+    let currentlyDrawing = false;
+    let previousX = 0;
+    let previousY = 0;
+
+    function setupCanvases() {
+      [ctx, previewCtx].forEach(c => {
+        c.fillStyle = 'black';
+        c.fillRect(0, 0, canvas.width, canvas.height);
+        c.strokeStyle = 'white';
+        c.lineWidth = 1.5;
+        c.lineCap = 'round';
+        c.lineJoin = 'round';
+      });
+    }
+
+    setupCanvases();
+
+    canvas.addEventListener('mousedown', beginDrawing);
+    canvas.addEventListener('mousemove', drawLine);
+    canvas.addEventListener('mouseup', endDrawing);
+    canvas.addEventListener('mouseout', endDrawing);
+
+    canvas.addEventListener('touchstart', handleTouchStart);
+    canvas.addEventListener('touchmove', handleTouchDraw);
+    canvas.addEventListener('touchend', endDrawing);
+
+    submitBtn.addEventListener('click', processDrawing);
+    clearBtn.addEventListener('click', resetCanvas);
+    drawAgainButton.addEventListener('click', startOver);
+
+    function beginDrawing(event) {
+      currentlyDrawing = true;
+      [previousX, previousY] = getCanvasCoordinates(event);
+    }
+
+    function drawLine(event) {
+      if (!currentlyDrawing) return;
+
+      const [x, y] = getCanvasCoordinates(event);
+      ctx.beginPath();
+      ctx.moveTo(previousX, previousY);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+
+      previewCtx.beginPath();
+      previewCtx.moveTo(previousX, previousY);
+      previewCtx.lineTo(x, y);
+      previewCtx.stroke();
+
+      previousX = x;
+      previousY = y;
+    }
+
+    function endDrawing() {
+      currentlyDrawing = false;
+    }
+
+    function getCanvasCoordinates(event) {
+      const rect = canvas.getBoundingClientRect();
+      let clientX, clientY;
+
+      if (event.type && event.type.includes('touch')) {
+        clientX = event.touches[0].clientX;
+        clientY = event.touches[0].clientY;
+      } else {
+        clientX = event.clientX;
+        clientY = event.clientY;
+      }
+
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+
+      const scaledX = Math.floor(x * scaleX);
+      const scaledY = Math.floor(y * scaleY);
+
+      return [
+        Math.max(0, Math.min(canvas.width - 1, scaledX)),
+        Math.max(0, Math.min(canvas.height - 1, scaledY))
+      ];
+    }
+
+    function handleTouchStart(e) {
+      e.preventDefault();
+      const touch = e.touches[0];
+      const fakeMouseEvent = new MouseEvent('mousedown', {
+        clientX: touch.clientX,
+        clientY: touch.clientY
+      });
+      canvas.dispatchEvent(fakeMouseEvent);
+    }
+
+    function handleTouchDraw(e) {
+      e.preventDefault();
+      const touch = e.touches[0];
+      const fakeMouseEvent = new MouseEvent('mousemove', {
+        clientX: touch.clientX,
+        clientY: touch.clientY
+      });
+      canvas.dispatchEvent(fakeMouseEvent);
+    }
+
+    function resetCanvas() {
+      setupCanvases();
+      resultsDiv.style.display = 'none';
+    }
+
+    function startOver() {
+      resetCanvas();
+      submitBtn.disabled = false;
+    }
+
+    async function processDrawing() {
+      submitBtn.disabled = true;
+      submitBtn.textContent = '🔄 Processing...';
+
+      try {
+        const imageDataUrl = canvas.toDataURL('image/png');
+        const apiResponse = await fetch('http://localhost:5000/predict', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: imageDataUrl })
+        });
+
+        if (!apiResponse.ok) throw new Error(`Server error: ${apiResponse.status}`);
+
+        const responseData = await apiResponse.json();
+
+        if (responseData.error) throw new Error(responseData.error);
+
+        predictionDisplay.textContent = responseData.prediction;
+        resultsDiv.style.display = 'block';
+        resultsDiv.classList.remove('error-state');
+      } catch (error) {
+        predictionDisplay.textContent = 'Error: ' + error.message;
+        resultsDiv.style.display = 'block';
+        resultsDiv.classList.add('error-state');
+      } finally {
+        submitBtn.textContent = '🤖 Predict Digit';
+        submitBtn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
